@@ -16,7 +16,7 @@ app.prepare().then(() => {
 
   const io = new Server(server, {
     cors: {
-      origin: "*",
+      origin: process.env.NEXT_PUBLIC_BASE_URL || "*",
       methods: ["GET", "POST"]
     }
   });
@@ -58,8 +58,9 @@ app.prepare().then(() => {
     });
   });
 
-  server.listen(3000, (err) => {
+  const port = process.env.PORT || 3000;
+  server.listen(port, (err) => {
     if (err) throw err;
-    console.log('> Ready on http://localhost:3000');
+    console.log(`> Ready on http://localhost:${port}`);
   });
 });

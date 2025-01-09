@@ -22,63 +22,76 @@ const FeedbackView = () => {
   useEffect(() => {
     if (!sessionId) return;
   
-    const socketUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-    socket = io(socketUrl, {
-      path: '/api/socketio',
-      transports: ['websocket'],
-      reconnectionAttempts: 5
-    });
+    let socketInstance = null;
+  
+    const initSocket = async () => {
+      try {
+        // Initialize Socket.IO server
+        await fetch('/api/socketio');
+        
+        if (socketInstance?.connected) {
+          console.log('Reusing existing connection');
+          return;
+        }
+  
+        socketInstance = io({
+          path: '/api/socketio',
+          transports: ['websocket'],
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          reconnection: true
+        });
+  
+        socketInstance.on('connect', () => {
+          console.log('Socket connected successfully');
+          setIsConnected(true);
+          socketInstance.emit('joinSession', { 
+            sessionId, 
+            viewpoint: { lat, lng, dir } 
+          });
+        });
+  
+        socketInstance.on('disconnect', (reason) => {
+          console.log('Socket disconnected:', reason);
+          setIsConnected(false);
+        });
+  
+        socket = socketInstance; // Update the global socket reference
+      } catch (error) {
+        console.error('Socket initialization error:', error);
+      }
+    
 
-    const onConnect = () => {
-      console.log('Socket connected');
-      setIsConnected(true);
-      socket.emit('joinSession', { 
-        sessionId, 
-        viewpoint: { lat, lng, dir } 
+      socket.on('tagAdded', (newTag) => {
+        console.log('Received new tag:', newTag);
+        setTags(prevTags => {
+          const exists = prevTags.some(t => t._id === newTag._id);
+          if (exists) return prevTags;
+          return [...prevTags, { ...newTag, selected: false }];
+        });
+      });
+
+      socket.on('tagVoted', (data) => {
+        console.log('Received vote update:', data);
+        setTags(prevTags => 
+          prevTags.map(tag => 
+            tag._id === data.tagId 
+              ? { ...tag, votes: data.votes }
+              : tag
+          )
+        );
       });
     };
 
-    const onDisconnect = () => {
-      console.log('Socket disconnected');
-      setIsConnected(false);
-    };
-
-    const onTagAdded = (newTag) => {
-      console.log('Received new tag:', newTag);
-      setTags(prevTags => {
-        const exists = prevTags.some(t => t._id === newTag._id);
-        if (exists) return prevTags;
-        return [...prevTags, { ...newTag, selected: false }];
-      });
-    };
-
-    const onTagVoted = (data) => {
-      console.log('Received vote update:', data);
-      setTags(prevTags => 
-        prevTags.map(tag => 
-          tag._id === data.tagId 
-            ? { ...tag, votes: data.votes }
-            : tag
-        )
-      );
-    };
-
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on('tagAdded', onTagAdded);
-    socket.on('tagVoted', onTagVoted);
-
+    initSocket();
     fetchTags();
 
     return () => {
-      if (socket) {
-        socket.off('connect', onConnect);
-        socket.off('disconnect', onDisconnect);
-        socket.off('tagAdded', onTagAdded);
-        socket.off('tagVoted', onTagVoted);
-        socket.disconnect();
-      }
-    };
+        if (socketInstance) {
+          console.log('Cleaning up socket connection');
+          socketInstance.disconnect();
+        }
+      };
   }, [sessionId, lat, lng, dir]);
 
   const fetchTags = async () => {
@@ -121,6 +134,46 @@ const FeedbackView = () => {
     }
   };
 
+  const toggleTagAndVote = async (tagId) => {
+    if (!sessionId || !lat || !lng || !dir || !isConnected) return;
+
+    // First, toggle the selection state locally
+    setTags(prevTags => 
+      prevTags.map(tag => 
+        tag._id === tagId ? { ...tag, selected: !tag.selected } : tag
+      )
+    );
+
+    try {
+      const response = await fetch('/api/tags', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          tagId,
+          sessionId,
+          lat,
+          lng,
+          dir,
+          action: tags.find(t => t._id === tagId)?.selected ? 'remove' : 'add'
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to update vote');
+
+      const data = await response.json();
+      console.log('Vote update:', data);
+      socket.emit('tagVoted', data);
+    } catch (error) {
+      console.error('Error updating vote:', error);
+      // Revert the selection if the vote update failed
+      setTags(prevTags => 
+        prevTags.map(tag => 
+          tag._id === tagId ? { ...tag, selected: !tag.selected } : tag
+        )
+      );
+    }
+  };
+
   const handleSubmitFeedback = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -151,47 +204,6 @@ const FeedbackView = () => {
       setMessage('Error submitting feedback. Please try again.');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const toggleTagAndVote = async (tagId) => {
-    if (!sessionId || !lat || !lng || !dir || !isConnected) return;
-
-    // First, toggle the selection state locally
-    setTags(prevTags => 
-      prevTags.map(tag => 
-        tag._id === tagId ? { ...tag, selected: !tag.selected } : tag
-      )
-    );
-
-    try {
-      const response = await fetch('/api/tags', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          tagId,
-          sessionId,
-          lat,
-          lng,
-          dir,
-          // Add action to specify if we're adding or removing vote
-          action: tags.find(t => t._id === tagId)?.selected ? 'remove' : 'add'
-        })
-      });
-
-      if (!response.ok) throw new Error('Failed to update vote');
-
-      const data = await response.json();
-      console.log('Vote update:', data);
-      socket.emit('tagVoted', data);
-    } catch (error) {
-      console.error('Error updating vote:', error);
-      // Revert the selection if the vote update failed
-      setTags(prevTags => 
-        prevTags.map(tag => 
-          tag._id === tagId ? { ...tag, selected: !tag.selected } : tag
-        )
-      );
     }
   };
 

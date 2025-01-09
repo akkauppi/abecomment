@@ -21,13 +21,13 @@ const FeedbackView = () => {
 
   useEffect(() => {
     if (!sessionId) return;
-
-  // Use environment variable for socket connection
-  const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000';
-  socket = io(socketUrl, {
-    transports: ['websocket'],
-    reconnectionAttempts: 5
-  });
+  
+    const socketUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    socket = io(socketUrl, {
+      path: '/api/socketio',
+      transports: ['websocket'],
+      reconnectionAttempts: 5
+    });
 
     const onConnect = () => {
       console.log('Socket connected');

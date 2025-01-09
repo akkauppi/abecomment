@@ -19,11 +19,11 @@
     "mongodb": "^6.12.0",
     "next": "15.1.4",
     "qrcode.react": "^4.2.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "latest",
+    "react-dom": "latest",
     "shadcn-ui": "^0.9.4",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
+    "socket.io": "^4.7.2",
+    "socket.io-client": "^4.7.2",
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {

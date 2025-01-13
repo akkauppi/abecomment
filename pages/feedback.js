@@ -5,8 +5,12 @@ import { Card, CardHeader, CardContent, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import ViewpointFeedback from '@/components/feedback/ViewpointFeedback';
 
-let socket;
+// Make socket globally available
+if (typeof window !== 'undefined') {
+  window.socket = window.socket || null;
+}
 
 const FeedbackView = () => {
   const router = useRouter();
@@ -19,79 +23,98 @@ const FeedbackView = () => {
   const [message, setMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
 
+  // Socket initialization
   useEffect(() => {
-    if (!sessionId) return;
-  
+    if (!sessionId || !lat || !lng || !dir) {
+      console.log('[Feedback] Missing required params for socket setup:', { sessionId, lat, lng, dir });
+      return;
+    }
+
     let socketInstance = null;
-  
-    const initSocket = async () => {
+
+    const setupSocket = () => {
       try {
-        // Initialize Socket.IO server
-        await fetch('/api/socketio');
-        
-        if (socketInstance?.connected) {
-          console.log('Reusing existing connection');
-          return;
-        }
-  
+        // Create new socket instance
         socketInstance = io({
           path: '/api/socketio',
           transports: ['websocket'],
+          reconnectionAttempts: 5,
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,
-          reconnection: true
+          timeout: 20000,
+          forceNew: true
         });
-  
+
+        // Set up event handlers
         socketInstance.on('connect', () => {
-          console.log('Socket connected successfully');
+          console.log('[Feedback] Socket connected');
           setIsConnected(true);
+          
+          // Join session after successful connection
           socketInstance.emit('joinSession', { 
             sessionId, 
             viewpoint: { lat, lng, dir } 
           });
+          
+          window.socket = socketInstance;
         });
-  
-        socketInstance.on('disconnect', (reason) => {
-          console.log('Socket disconnected:', reason);
+
+        // Handle all disconnect scenarios
+        const handleDisconnect = (reason) => {
+          console.log('[Feedback] Socket disconnected:', reason);
           setIsConnected(false);
+          window.socket = null;
+        };
+
+        socketInstance.on('disconnect', handleDisconnect);
+        socketInstance.on('connect_error', () => handleDisconnect('connect_error'));
+        socketInstance.on('connect_timeout', () => handleDisconnect('timeout'));
+        socketInstance.on('reconnect_failed', () => handleDisconnect('reconnect_failed'));
+
+        socketInstance.on('reconnect', () => {
+          console.log('[Feedback] Socket reconnected');
+          setIsConnected(true);
         });
-  
-        socket = socketInstance; // Update the global socket reference
+
+        // Handle tag events
+        socketInstance.on('tagAdded', (newTag) => {
+          setTags(prevTags => {
+            const exists = prevTags.some(t => t._id === newTag._id);
+            if (exists) return prevTags;
+            return [...prevTags, { ...newTag, selected: false }];
+          });
+        });
+
+        socketInstance.on('tagVoted', (data) => {
+          setTags(prevTags => 
+            prevTags.map(tag => 
+              tag._id === data.tagId 
+                ? { ...tag, votes: data.votes }
+                : tag
+            )
+          );
+        });
       } catch (error) {
         console.error('Socket initialization error:', error);
+        setIsConnected(false);
       }
-    
-
-      socket.on('tagAdded', (newTag) => {
-        console.log('Received new tag:', newTag);
-        setTags(prevTags => {
-          const exists = prevTags.some(t => t._id === newTag._id);
-          if (exists) return prevTags;
-          return [...prevTags, { ...newTag, selected: false }];
-        });
-      });
-
-      socket.on('tagVoted', (data) => {
-        console.log('Received vote update:', data);
-        setTags(prevTags => 
-          prevTags.map(tag => 
-            tag._id === data.tagId 
-              ? { ...tag, votes: data.votes }
-              : tag
-          )
-        );
-      });
     };
 
-    initSocket();
+    setupSocket();
     fetchTags();
 
+    // Cleanup
     return () => {
-        if (socketInstance) {
-          console.log('Cleaning up socket connection');
-          socketInstance.disconnect();
-        }
-      };
+      if (socketInstance) {
+        console.log('Cleaning up socket connection');
+        socketInstance.off('connect');
+        socketInstance.off('disconnect');
+        socketInstance.off('tagAdded');
+        socketInstance.off('tagVoted');
+        socketInstance.disconnect();
+        window.socket = null;
+      }
+    };
   }, [sessionId, lat, lng, dir]);
 
   const fetchTags = async () => {
@@ -110,7 +133,7 @@ const FeedbackView = () => {
   };
 
   const addNewTag = async () => {
-    if (!newTag.trim() || !sessionId || !isConnected) return;
+    if (!newTag.trim() || !sessionId || !isConnected || !window.socket) return;
 
     try {
       const response = await fetch('/api/tags', {
@@ -125,8 +148,7 @@ const FeedbackView = () => {
       if (!response.ok) throw new Error('Failed to add tag');
 
       const tag = await response.json();
-      console.log('Emitting new tag:', tag);
-      socket.emit('newTag', tag);
+      window.socket.emit('newTag', tag);
       setNewTag('');
     } catch (error) {
       console.error('Error adding tag:', error);
@@ -135,7 +157,7 @@ const FeedbackView = () => {
   };
 
   const toggleTagAndVote = async (tagId) => {
-    if (!sessionId || !lat || !lng || !dir || !isConnected) return;
+    if (!sessionId || !lat || !lng || !dir || !isConnected || !window.socket) return;
 
     // First, toggle the selection state locally
     setTags(prevTags => 
@@ -161,8 +183,7 @@ const FeedbackView = () => {
       if (!response.ok) throw new Error('Failed to update vote');
 
       const data = await response.json();
-      console.log('Vote update:', data);
-      socket.emit('tagVoted', data);
+      window.socket.emit('tagVoted', data);
     } catch (error) {
       console.error('Error updating vote:', error);
       // Revert the selection if the vote update failed
@@ -176,6 +197,8 @@ const FeedbackView = () => {
 
   const handleSubmitFeedback = async (e) => {
     e.preventDefault();
+    if (!window.socket) return;
+    
     setIsSubmitting(true);
     try {
       const response = await fetch('/api/feedback', {
@@ -191,6 +214,7 @@ const FeedbackView = () => {
 
       if (!response.ok) throw new Error('Submission failed');
       
+      const result = await response.json();
       setMessage('Thank you for your feedback!');
       setFeedback('');
       // Reset tag selections but keep the votes
@@ -208,7 +232,7 @@ const FeedbackView = () => {
   };
 
   return (
-    <div className="max-w-md mx-auto p-4 sm:p-6 md:p-8">
+    <div className="max-w-2xl mx-auto p-4 sm:p-6 md:p-8 space-y-6">
       <Card>
         <CardHeader className="space-y-2">
           <h2 className="text-2xl font-bold">Share Your Feedback</h2>
@@ -296,6 +320,15 @@ const FeedbackView = () => {
           </Button>
         </CardFooter>
       </Card>
+
+      {/* Add ViewpointFeedback component */}
+      {lat && lng && dir && sessionId && (
+        <ViewpointFeedback 
+          viewpointId={`${lat}-${lng}-${dir}`}
+          sessionId={sessionId}
+          tags={tags}
+        />
+      )}
     </div>
   );
 };

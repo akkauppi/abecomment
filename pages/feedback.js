@@ -37,7 +37,7 @@ const FeedbackView = () => {
         // Create new socket instance
         socketInstance = io({
           path: '/api/socketio',
-          transports: ['websocket'],
+          transports: ['polling', 'websocket'],
           reconnectionAttempts: 5,
           reconnectionDelay: 1000,
           reconnectionDelayMax: 5000,

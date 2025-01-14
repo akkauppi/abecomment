@@ -17,15 +17,19 @@ app.prepare().then(() => {
   const io = new Server(server, {
     path: '/api/socketio',
     addTrailingSlash: false,
-    transports: ['websocket'],
+    transports: ['polling', 'websocket'], // Allow polling fallback
     cors: {
-      origin: '*',
-      methods: ['GET', 'POST']
+      origin: true, // Reflects the request origin
+      methods: ['GET', 'POST'],
+      credentials: true
     },
     connectionStateRecovery: {
       maxDisconnectionDuration: 2 * 60 * 1000,
       skipMiddlewares: true,
-    }
+    },
+    allowEIO3: true, // Enable Engine.IO v3 compatibility
+    pingTimeout: 60000, // Increase ping timeout
+    pingInterval: 25000 // Increase ping interval
   });
 
   // Debug middleware
